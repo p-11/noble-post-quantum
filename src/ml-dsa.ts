@@ -85,7 +85,7 @@ export const PARAMS: Record<string, DSAParam> = {
 } as const;
 
 // NOTE: there is a lot cases where negative numbers used (with smod instead of mod).
-type Poly = Int32Array;
+export type Poly = Int32Array;
 const newPoly = (n: number): Int32Array => new Int32Array(n);
 
 const { mod, smod, NTT, bitsCoder } = genCrystals({
@@ -657,3 +657,110 @@ export const ml_dsa87: DSA = /* @__PURE__ */ getDilithium({
   XOF256,
   securityLevel: 256,
 });
+
+/**
+ * Unpack utilities for ML-DSA public keys and signatures
+ * Exposes internal unpacking functions
+ */
+export type UnpackedPublicKey = {
+  rho: Uint8Array;       // 32-byte seed
+  t1: Poly[];           // K polynomials (unpacked coefficients)
+  tr: Uint8Array;       // 64-byte hash
+  a_hat: Poly[][];      // KxL matrix in NTT domain
+};
+
+export type UnpackedSignature = {
+  c_tilde: Uint8Array;  // Challenge hash
+  z: Poly[];            // L polynomials (response)
+  h: Poly[];            // K polynomials (hints)
+};
+
+/**
+ * Unpacker type for ML-DSA variants
+ */
+export type MLDSAUnpacker = {
+  unpackPublicKey: (publicKey: Uint8Array) => UnpackedPublicKey;
+  unpackSignature: (signature: Uint8Array) => UnpackedSignature;
+  params: { K: number; L: number; N: number; D: number; ETA: number; GAMMA1: number; GAMMA2: number; OMEGA: number; C_TILDE_BYTES: number };
+};
+
+/**
+ * Create unpacking utilities for a specific ML-DSA variant
+ */
+function createUnpacker(params: typeof PARAMS[number], C_TILDE_BYTES: number): MLDSAUnpacker {
+  const { K, L, D, ETA, GAMMA1, GAMMA2, OMEGA } = params;
+  const TR_BYTES = 64;
+  
+  // Use the same polyCoder pattern as getDilithium (lines 104-108)
+  // This uses the correct bitsCoder implementation
+  const polyCoderFn = (d: number, compress: (i: number) => number = id, verify: (i: number) => number = id) =>
+    bitsCoder(d, {
+      encode: (i: number) => compress(verify(i)),
+      decode: (i: number) => verify(compress(i)),
+    });
+  
+  const T1Coder = polyCoderFn(10);
+  const publicCoder = splitCoder('publicKey', 32, vecCoder(T1Coder, K));
+  
+  // For signature unpacking
+  const ZCoder = polyCoderFn(GAMMA1 === 1 << 17 ? 18 : 20, (i: number) => smod(GAMMA1 - i));
+  
+  return {
+    unpackPublicKey: (publicKey: Uint8Array): UnpackedPublicKey => {
+      const [rho, t1] = publicCoder.decode(publicKey);
+      const tr = shake256(publicKey, { dkLen: TR_BYTES });
+      
+      // Expand A from rho using XOF128
+      const a_hat: Poly[][] = [];
+      const xof = XOF128(rho);
+      for (let i = 0; i < K; i++) {
+        const pv: Poly[] = [];
+        for (let j = 0; j < L; j++) {
+          pv.push(RejNTTPoly(xof.get(j, i)));
+        }
+        a_hat.push(pv);
+      }
+      xof.clean();
+      
+      return { rho, t1, tr, a_hat };
+    },
+    unpackSignature: (signature: Uint8Array): UnpackedSignature => {
+      // Signature format: c_tilde || z || h
+      const c_tilde = signature.slice(0, C_TILDE_BYTES);
+      
+      // Z is L polynomials
+      const zBytesLen = ZCoder.bytesLen * L;
+      const zBytes = signature.slice(C_TILDE_BYTES, C_TILDE_BYTES + zBytesLen);
+      const z: Poly[] = [];
+      for (let i = 0; i < L; i++) {
+        const polyBytes = zBytes.slice(i * ZCoder.bytesLen, (i + 1) * ZCoder.bytesLen);
+        z.push(ZCoder.decode(polyBytes));
+      }
+      
+      // H is hint encoding
+      const hBytes = signature.slice(C_TILDE_BYTES + zBytesLen);
+      const h: Poly[] = [];
+      let k = 0;
+      for (let i = 0; i < K; i++) {
+        const hi = newPoly(N);
+        for (let j = k; j < hBytes[OMEGA + i]; j++) {
+          hi[hBytes[j]] = 1;
+        }
+        k = hBytes[OMEGA + i];
+        h.push(hi);
+      }
+      
+      return { c_tilde, z, h };
+    },
+    params: { K, L, N, D, ETA, GAMMA1, GAMMA2, OMEGA, C_TILDE_BYTES },
+  };
+}
+
+/** Unpack utilities for ML-DSA-44 */
+export const ml_dsa44_unpack: MLDSAUnpacker = /* @__PURE__ */ createUnpacker(PARAMS[2], 32);
+
+/** Unpack utilities for ML-DSA-65 */
+export const ml_dsa65_unpack: MLDSAUnpacker = /* @__PURE__ */ createUnpacker(PARAMS[3], 48);
+
+/** Unpack utilities for ML-DSA-87 */
+export const ml_dsa87_unpack: MLDSAUnpacker = /* @__PURE__ */ createUnpacker(PARAMS[5], 64);
