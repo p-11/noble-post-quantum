@@ -1,6 +1,9 @@
 {
-  "name": "@noble/post-quantum",
-  "version": "0.5.2",
+  "name": "@project-eleven/experimental-noble-post-quantum",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.5.3",
   "description": "Auditable & minimal JS implementation of post-quantum cryptography: FIPS 203, 204, 205",
   "files": [
     "*.js",
@@ -68,7 +71,7 @@
   "funding": "https://paulmillr.com/funding/",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/paulmillr/noble-post-quantum.git"
+    "url": "git+https://github.com/p-11/noble-post-quantum.git"
   },
   "type": "module",
   "main": "index.js",

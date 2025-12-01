@@ -1,17 +1,50 @@
-name: Publish release
+# P11 Note, we are releasing a fork of noble-post-quantum to npm
+name: Release Package
+
 on:
-  release:
-    types: [created]
+  push:
+    branches: ['unpacked-public-keys']
+
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
-  release-js:
-    name: 'jsbt v0.4.4' # Should match commit below
-    uses: paulmillr/jsbt/.github/workflows/release.yml@9d2a1d7f87d4e16f7f97123be2a57c1134c2d393
-    with:
-      build-path: test/build
-      # slow-types: false
-    secrets:
-      NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
+  deploy:
+    name: Release Noble Post Quantum Package
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout Repo
+        # pin to specific commit to avoid supply chain attacks (v5.0.0)
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Node + npm registry
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@project-eleven'
+
+      - name: Verify NPM_TOKEN is present
+        run: |
+          if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "NPM_TOKEN secret is missing"; exit 1; fi
+
+      - name: Verify lockfile present
+        run: test -f package-lock.json || (echo "Missing package-lock.json"; exit 1)
+
+      - name: Locked install without scripts
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish to npm with provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
